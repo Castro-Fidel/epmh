@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+
+EPMH_SCRIPTS_PATH="$(dirname $(readlink -f "$0"))"
+EPMH_YAD="${EPMH_SCRIPTS_PATH}/yad_standalone_12_3"
+EPMH_RANDOM="${RANDOM}"
+EPM_TMP_PATH="/tmp/epmh-tmp-${EPMH_RANDOM}"
+
+mkdir -p "${EPM_TMP_PATH}"
+
+echo "Check available applications..."
+epmp </dev/null 1> "${EPM_TMP_PATH}/available_app"
+echo "Done."
+echo "Check installed applications..."
+epmp --list --short </dev/null 1> "${EPM_TMP_PATH}/installed_app"
+echo "Done."
+
+while read BOOL_IN_LIST ; do
+    if [[ ! $(echo "$BOOL_IN_LIST" | grep "Available applications") ]] ; then
+        if [[ $(grep $(echo "$BOOL_IN_LIST" | awk -F' - ' '{print $1}') "${EPM_TMP_PATH}/installed_app") ]] ; then
+            SET_BOOLEAN="TRUE"
+        else
+            SET_BOOLEAN="FALSE"
+        fi
+        echo -en "$SET_BOOLEAN|$(echo "$BOOL_IN_LIST" | awk -F' - ' '{print $1}')|$(echo "$BOOL_IN_LIST" | awk -F' - ' '{print $2 $3 $4}')|" >> "${EPM_TMP_PATH}/available_app_tmp"
+    fi
+done < "${EPM_TMP_PATH}/available_app"
+
+touch "${EPM_TMP_PATH}/installed_app_tmp"
+while read BOOL_IN_LIST ; do
+    echo -en "FALSE|$BOOL_IN_LIST|" >> "${EPM_TMP_PATH}/installed_app_tmp"
+done < "${EPM_TMP_PATH}/installed_app"
+
+old_IFS=$IFS
+IFS=$'|'
+"${EPMH_YAD}" --plug="$EPMH_RANDOM" --tabnum=1 --list --checklist --search-column=3\
+            --separator='|' --column "Set" --column "Applications:" --column  "Info" \
+            `cat "${EPM_TMP_PATH}/available_app_tmp"` > "${EPM_TMP_PATH}/choosed_app" 2>/dev/null &
+
+"${EPMH_YAD}" --plug="$EPMH_RANDOM" --tabnum=2 --list --checklist --search-column=2\
+            --separator='|' --column "Set" --column "Applications:" \
+            `cat "${EPM_TMP_PATH}/installed_app_tmp"` > "${EPM_TMP_PATH}/removed_app" 2>/dev/null &
+
+"${EPMH_YAD}" --key=$EPMH_RANDOM --notebook --borders=3 --width=1200 --height=800 \
+            --title "epmh" --tab-pos=bottom --tab="INSTALL" --tab="REMOVE" 2>/dev/null
+YAD_STATUS="$?"
+if [[ "$YAD_STATUS" == "1" || "$YAD_STATUS" == "252" ]] ; then
+    exit 0
+fi
+IFS=${old_IFS}
+
+EPMH_CHOOSED_APP=""
+while read CHOOSED_APP ; do
+    DEL_BOOLEAN="$(echo ${CHOOSED_APP} | awk -F'|' '{print $2}'| awk '{print $1}' )"
+    grep "$DEL_BOOLEAN" "${EPM_TMP_PATH}/installed_app" &>/dev/null
+    if [[ "$?" != 0 ]] ; then
+        EPMH_CHOOSED_APP+="$DEL_BOOLEAN "
+    fi
+done < "${EPM_TMP_PATH}/choosed_app"
+
+EPMH_REMOVED_APP=""
+while read REMOVED_APP ; do
+    DEL_BOOLEAN="$(echo ${REMOVED_APP} | awk -F'|' '{print $2}'| awk '{print $1}' )"
+    EPMH_REMOVED_APP+="$DEL_BOOLEAN "
+done < "${EPM_TMP_PATH}/removed_app"
+
+rm -r "${EPM_TMP_PATH}"
+
+if [[ -z "$EPMH_CHOOSED_APP" ]] && [[ -z "$EPMH_REMOVED_APP" ]] ; then
+    echo "Nothing to do... Exit."
+    exit 0
+else
+    [[ -n "$EPMH_CHOOSED_APP" ]] && epmp $EPMH_CHOOSED_APP
+    [[ -n "$EPMH_REMOVED_APP" ]] && epmp --remove $EPMH_REMOVED_APP
+    echo "Done."
+fi
