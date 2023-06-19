@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+EPMH_PLUGIN_NAME="max_map_count"
+EPMH_PLUGIN_INFO="Уменьшить ограничения mmap операционной системы.
+Необходимо для некоторых игр. (значение взято из SteamOS)"
+
+epmh_check () {
+    grep "2147483642" /proc/sys/vm/max_map_count &>/dev/null && return 0 || return 1
+}
+
+epmh_function () {
+    sysctl -w vm.max_map_count=2147483642 && return 0 || return 1
+}

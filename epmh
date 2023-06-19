@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+if [ "$(id -u)" -ne 0 ]; then
+    echo 'This script must be run as root!'
+    exit 1
+fi
+
 #fix for wayland
 export NO_AT_BRIDGE=1
 export GDK_BACKEND="x11"
@@ -7,42 +12,60 @@ export GDK_BACKEND="x11"
 EPMH_SCRIPTS_PATH="$(dirname $(readlink -f "$0"))"
 EPMH_YAD="${EPMH_SCRIPTS_PATH}/yad_standalone_12_3"
 EPMH_RANDOM="${RANDOM}"
-EPM_TMP_PATH="/tmp/epmh-tmp-${EPMH_RANDOM}"
+EPMH_TMP_PATH="/tmp/epmh-tmp-${EPMH_RANDOM}"
 
-mkdir -p "${EPM_TMP_PATH}"
+mkdir -p "${EPMH_TMP_PATH}"
 
 echo "Check available applications..."
-epmp </dev/null 1> "${EPM_TMP_PATH}/available_app"
+epmp </dev/null 1> "${EPMH_TMP_PATH}/available_app"
 echo -e "Done.\nCheck installed applications..."
-epmp --list --short </dev/null 1> "${EPM_TMP_PATH}/installed_app"
+epmp --list --short </dev/null 1> "${EPMH_TMP_PATH}/installed_app"
 echo "Done."
 
 while read BOOL_IN_LIST ; do
     if [[ ! $(echo "$BOOL_IN_LIST" | grep "Available applications") ]] ; then
-        if [[ $(grep $(echo "$BOOL_IN_LIST" | awk -F' - ' '{print $1}') "${EPM_TMP_PATH}/installed_app") ]]
+        if [[ $(grep $(echo "$BOOL_IN_LIST" | awk -F' - ' '{print $1}') "${EPMH_TMP_PATH}/installed_app") ]]
         then SET_BOOLEAN="TRUE"
         else SET_BOOLEAN="FALSE"
         fi
-        echo -en "$SET_BOOLEAN|$(echo "$BOOL_IN_LIST" | awk -F' - ' '{print $1}')|$(echo "$BOOL_IN_LIST" | awk -F' - ' '{print $2 $3 $4}')|" >> "${EPM_TMP_PATH}/available_app_tmp"
+        echo -en "$SET_BOOLEAN|$(echo "$BOOL_IN_LIST" | awk -F' - ' '{print $1}')|$(echo "$BOOL_IN_LIST" | awk -F' - ' '{print $2 $3 $4}')|" >> "${EPMH_TMP_PATH}/available_app_tmp"
     fi
-done < "${EPM_TMP_PATH}/available_app"
+done < "${EPMH_TMP_PATH}/available_app"
 
-touch "${EPM_TMP_PATH}/installed_app_tmp"
+touch "${EPMH_TMP_PATH}/installed_app_tmp"
 while read BOOL_IN_LIST ; do
-    echo -en "FALSE|$BOOL_IN_LIST|" >> "${EPM_TMP_PATH}/installed_app_tmp"
-done < "${EPM_TMP_PATH}/installed_app"
+    echo -en "FALSE|$BOOL_IN_LIST|" >> "${EPMH_TMP_PATH}/installed_app_tmp"
+done < "${EPMH_TMP_PATH}/installed_app"
+
+PLUGINS_TO_GUI=""
+touch "${EPMH_TMP_PATH}/skip_plugins"
+for GREP_PLUGINS in "${EPMH_SCRIPTS_PATH}"/epmh_plugins/* ; do
+    . "$GREP_PLUGINS"
+    if epmh_check ; then
+        BOOL_IN_PLUGINS=TRUE
+        echo "$GREP_PLUGINS" >> "${EPMH_TMP_PATH}/skip_plugins"
+    else
+        BOOL_IN_PLUGINS=FALSE
+    fi
+    PLUGINS_TO_GUI+="$BOOL_IN_PLUGINS| $EPMH_PLUGIN_NAME |$EPMH_PLUGIN_INFO |"
+done
+
 
 old_IFS=$IFS && IFS=$'|'
 "${EPMH_YAD}" --plug="$EPMH_RANDOM" --tabnum=1 --list --checklist --search-column=3\
             --separator='|' --column "Set" --column "Applications:" --column  "Info" \
-            `cat "${EPM_TMP_PATH}/available_app_tmp"` > "${EPM_TMP_PATH}/choosed_app" 2>/dev/null &
+            `cat "${EPMH_TMP_PATH}/available_app_tmp"` > "${EPMH_TMP_PATH}/choosed_app" 2>/dev/null &
 
 "${EPMH_YAD}" --plug="$EPMH_RANDOM" --tabnum=2 --list --checklist --search-column=2\
             --separator='|' --column "Set" --column "Applications:" \
-            `cat "${EPM_TMP_PATH}/installed_app_tmp"` > "${EPM_TMP_PATH}/removed_app" 2>/dev/null &
+            `cat "${EPMH_TMP_PATH}/installed_app_tmp"` > "${EPMH_TMP_PATH}/removed_app" 2>/dev/null &
+
+"${EPMH_YAD}" --plug="$EPMH_RANDOM" --tabnum=3 --list --checklist --search-column=3\
+            --separator='|' --column "Set" --column "Settings" --column  "Info" \
+            $PLUGINS_TO_GUI > "${EPMH_TMP_PATH}/plugins" 2>/dev/null &
 
 "${EPMH_YAD}" --key=$EPMH_RANDOM --notebook --borders=3 --width=1200 --height=800 \
-            --title "epmh" --tab-pos=bottom --tab="INSTALL" --tab="REMOVE" 2>/dev/null
+            --title "epmh" --tab-pos=bottom --tab="INSTALL" --tab="REMOVE" --tab="SETTINGS" 2>/dev/null
 YAD_STATUS="$?"
 IFS=${old_IFS}
 [[ "$YAD_STATUS" == "1" || "$YAD_STATUS" == "252" ]] && exit 0
@@ -50,23 +73,37 @@ IFS=${old_IFS}
 EPMH_CHOOSED_APP=""
 while read CHOOSED_APP ; do
     DEL_BOOLEAN="$(echo ${CHOOSED_APP} | awk -F'|' '{print $2}'| awk '{print $1}' )"
-    grep "$DEL_BOOLEAN" "${EPM_TMP_PATH}/installed_app" &>/dev/null
+    grep "$DEL_BOOLEAN" "${EPMH_TMP_PATH}/installed_app" &>/dev/null
     [[ "$?" != 0 ]] && EPMH_CHOOSED_APP+="$DEL_BOOLEAN "
-done < "${EPM_TMP_PATH}/choosed_app"
+done < "${EPMH_TMP_PATH}/choosed_app"
 
 EPMH_REMOVED_APP=""
 while read REMOVED_APP ; do
     DEL_BOOLEAN="$(echo ${REMOVED_APP} | awk -F'|' '{print $2}'| awk '{print $1}' )"
     EPMH_REMOVED_APP+="$DEL_BOOLEAN "
-done < "${EPM_TMP_PATH}/removed_app"
+done < "${EPMH_TMP_PATH}/removed_app"
 
-rm -r "${EPM_TMP_PATH}"
+EPMH_PLUGINS=""
+while read GET_PLUGINS ; do
+    DEL_BOOLEAN="$(echo ${GET_PLUGINS} | awk -F'|' '{print $2}'| awk '{print $1}' )"
+    if ! grep "$DEL_BOOLEAN" "${EPMH_TMP_PATH}/skip_plugins" &>/dev/null ; then
+        EPMH_PLUGINS+="$DEL_BOOLEAN "
+    fi
+done < "${EPMH_TMP_PATH}/plugins"
 
-if [[ -z "$EPMH_CHOOSED_APP" ]] && [[ -z "$EPMH_REMOVED_APP" ]] ; then
+rm -r "${EPMH_TMP_PATH}"
+
+if [[ -z "$EPMH_CHOOSED_APP" ]] && [[ -z "$EPMH_REMOVED_APP" ]] && [[ -z "$EPMH_PLUGINS" ]] ; then
     echo "Nothing to do... Exit."
 else
     [[ -n "$EPMH_CHOOSED_APP" ]] && epmp $EPMH_CHOOSED_APP
     [[ -n "$EPMH_REMOVED_APP" ]] && epmp --remove $EPMH_REMOVED_APP
+    if [[ -n "$EPMH_PLUGINS" ]] ; then
+        for START_EPMH_FUNCTIONS in $EPMH_PLUGINS ; do
+            . "${EPMH_SCRIPTS_PATH}/epmh_plugins/${START_EPMH_FUNCTIONS}"
+            epmh_function && echo "In used: ${START_EPMH_FUNCTIONS}"
+        done
+    fi
     echo "Done."
 fi
 
